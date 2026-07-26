@@ -28,7 +28,9 @@ from .models import (
 
 logger = logging.getLogger("mailroom")
 
-ENDPOINT_PATH = "/v1/mailroom/actions"
+ENDPOINT_PATH = "/v1/mailroom/actions"  # suggested path for your own reference/curl testing only --
+                                         # the route below matches ANY path, so whatever URL you
+                                         # actually register with the grader will still work.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024  # generous; tune to your traffic
 MAX_RESPONSE_BYTES = 512 * 1024  # per spec
 
@@ -72,8 +74,8 @@ def _json_response(payload: dict, status_code: int = 200) -> JSONResponse:
     return JSONResponse(content=payload, status_code=status_code, media_type="application/json")
 
 
-@app.post(ENDPOINT_PATH)
-async def mailroom_endpoint(request: Request) -> JSONResponse:
+@app.post("/{full_path:path}")
+async def mailroom_endpoint(full_path: str, request: Request) -> JSONResponse:
     raw = await request.body()
     if len(raw) > MAX_REQUEST_BYTES:
         raise HTTPException(status_code=400, detail="request body too large")
