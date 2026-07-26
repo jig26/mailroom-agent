@@ -22,7 +22,7 @@ import threading
 from contextlib import contextmanager
 from typing import Any, Iterator, Optional
 
-DB_PATH = os.environ.get("MAILROOM_DB", "mailroom.db")
+DB_PATH = os.environ.get("MAILROOM_DB", "/tmp/mailroom.db")
 
 _lock = threading.Lock()
 
