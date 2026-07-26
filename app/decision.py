@@ -13,10 +13,11 @@ from typing import Any
 
 from .models import ALLOWED_ACTIONS
 
-MODEL_NAME = os.environ.get("MAILROOM_MODEL", "gpt-4o-mini")
-# OpenAI-compatible endpoint: point this at any provider you like
-# (OpenAI, OpenRouter, Groq, a local Ollama/vLLM server, etc).
-API_BASE = os.environ.get("MAILROOM_API_BASE")  # None => official OpenAI
+MODEL_NAME = os.environ.get("MAILROOM_MODEL", "llama-3.3-70b-versatile")
+# OpenAI-compatible endpoint. Defaults to Groq's free tier; override
+# MAILROOM_API_BASE / MAILROOM_MODEL to point elsewhere (OpenAI, OpenRouter,
+# a local Ollama/vLLM server, etc).
+API_BASE = os.environ.get("MAILROOM_API_BASE", "https://api.groq.com/openai/v1")
 API_KEY = os.environ.get("MAILROOM_API_KEY", "")
 
 SYSTEM_PROMPT = """You are a mailroom triage assistant. You will be given ONE
@@ -179,5 +180,11 @@ def decide(dossier: dict) -> dict:
     try:
         raw = call_model(dossier)
         return validate_and_secure(dossier, raw)
-    except DecisionError:
+    except DecisionError as exc:
+        # Log the concrete reason so a misconfigured key/model/base URL is
+        # visible in server logs rather than silently degrading every
+        # dossier to the safe fallback.
+        import logging
+
+        logging.getLogger("mailroom").warning("decision fell back to safe default: %s", exc)
         return dict(SAFE_FALLBACK)
