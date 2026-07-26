@@ -73,6 +73,27 @@ def _json_response(payload: dict, status_code: int = 200) -> JSONResponse:
     return JSONResponse(content=payload, status_code=status_code, media_type="application/json")
 
 
+@app.get("/health")
+async def health() -> JSONResponse:
+    """Confirms the deployment can actually reach its model. Hit this after
+    setting env vars to verify config WITHOUT spending a Check attempt.
+    Returns model_ok=true only if a real round-trip to the provider works."""
+    from .decision import API_BASE, MODEL_NAME, call_model
+
+    info: dict[str, Any] = {
+        "model_name": MODEL_NAME,
+        "api_base": API_BASE,
+        "api_key_present": bool(__import__("os").environ.get("MAILROOM_API_KEY")),
+    }
+    try:
+        call_model({"dossierId": "healthcheck", "body": "ping"})
+        info["model_ok"] = True
+    except Exception as exc:  # noqa: BLE001 - surface the real reason
+        info["model_ok"] = False
+        info["error"] = str(exc)[:500]
+    return JSONResponse(content=info, media_type="application/json")
+
+
 @app.post("/{full_path:path}")
 async def mailroom_endpoint(full_path: str, request: Request) -> JSONResponse:
     raw = await request.body()
