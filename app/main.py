@@ -40,6 +40,27 @@ def _startup() -> None:
     store.init_db()
 
 
+# Belt-and-suspenders: some serverless ASGI wrappers (Vercel's included)
+# don't reliably run the startup lifespan event, which would otherwise
+# leave the DB uninitialized and turn the very first request into an
+# uncaught "no such table" 500. Running it once at import time too is
+# idempotent (CREATE TABLE IF NOT EXISTS) and cheap.
+store.init_db()
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    # Any bug should still come back as valid JSON with the right
+    # Content-Type, per the spec, and get logged with a full traceback so
+    # it's diagnosable from server logs instead of a bare 500.
+    logger.exception("unhandled error on %s", request.url.path)
+    return JSONResponse(
+        content={"error": "internal_error", "detail": str(exc)},
+        status_code=500,
+        media_type="application/json",
+    )
+
+
 def _json_response(payload: dict, status_code: int = 200) -> JSONResponse:
     body = json.dumps(payload).encode("utf-8")
     if len(body) > MAX_RESPONSE_BYTES:
