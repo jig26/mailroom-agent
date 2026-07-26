@@ -108,3 +108,10 @@ assert r10.json()["outcomes"][0]["status"] == "rejected"
 print("unknown callId rejected OK")
 
 print("\nALL SMOKE TESTS PASSED")
+
+# 11) route is path-agnostic: root and an arbitrary path both work, since we
+#     don't know the exact URL string that'll be registered with the grader.
+for path in ["/", "/whatever/path/the/grader/uses"]:
+    rr = client.post(path, json={"operation": "propose", "evaluationId": f"eval-path-{path}", "dossiers": [d1]})
+    assert rr.status_code == 200, f"{path} -> {rr.status_code}: {rr.text}"
+    print(f"catch-all route OK for {path!r}")
