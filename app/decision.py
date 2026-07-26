@@ -101,7 +101,7 @@ def call_model(dossier: dict) -> dict:
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_content},
             ],
-            timeout=30,
+            timeout=20,
         )
         raw = resp.choices[0].message.content
         return json.loads(raw)
