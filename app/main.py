@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request
@@ -32,6 +34,12 @@ ENDPOINT_PATH = "/v1/mailroom/actions"  # suggested path for your own reference/
                                          # actually register with the grader will still work.
 MAX_REQUEST_BYTES = 2 * 1024 * 1024  # generous; tune to your traffic
 MAX_RESPONSE_BYTES = 512 * 1024  # per spec
+
+# The grader sends ~64 dossiers per propose within a 55s budget. Calling
+# the model once per dossier sequentially blows that (64 * a few seconds).
+# Fan the uncached decisions out across a bounded thread pool instead.
+# Tune down if you hit provider rate limits, up if you have headroom.
+PROPOSE_CONCURRENCY = int(os.environ.get("MAILROOM_CONCURRENCY", "12"))
 
 app = FastAPI(title="mailroom-agent")
 
@@ -142,32 +150,60 @@ def handle_propose(body: dict) -> JSONResponse:
             detail="evaluationId already used with different dossier content",
         )
 
-    proposals: list[Proposal] = []
-    for d in dossiers_raw:
-        content_fp = dossier_content_fingerprint(d)
-        call_id = dossier_call_id(d["dossierId"])
+    # --- Stage 1: resolve a decision for every dossier. Cache hits are
+    # free; cache misses each need a model call, so run those misses
+    # concurrently to stay within the per-request time budget. Writes to
+    # the decision cache happen here; proposal persistence happens in
+    # stage 2 so the response is built in a single deterministic pass.
+    content_fps: dict[str, str] = {}
+    decisions: dict[str, dict] = {}
+    misses: list[dict] = []
 
+    for d in dossiers_raw:
+        did = d["dossierId"]
+        content_fp = dossier_content_fingerprint(d)
+        content_fps[did] = content_fp
         cached = store.get_cached_decision(content_fp)
         if cached is None:
-            decision = decide(d)
-            store.save_decision(
-                content_fp,
-                decision["action"],
-                decision["target"],
-                decision["payload"],
-                decision["evidence"],
-            )
+            misses.append(d)
         else:
-            decision = cached
+            decisions[did] = cached
+
+    def _resolve(dossier: dict) -> tuple[str, dict]:
+        # decide() never raises -- it returns SAFE_FALLBACK on failure --
+        # so one bad dossier can't sink the whole batch.
+        return dossier["dossierId"], decide(dossier)
+
+    if misses:
+        workers = max(1, min(PROPOSE_CONCURRENCY, len(misses)))
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for did, decision in pool.map(_resolve, misses):
+                decisions[did] = decision
+                store.save_decision(
+                    content_fps[did],
+                    decision["action"],
+                    decision["target"],
+                    decision["payload"],
+                    decision["evidence"],
+                )
+
+    # --- Stage 2: build proposals in the original dossier order. Fully
+    # deterministic, no model calls, one proposal per dossier.
+    proposals: list[Proposal] = []
+    for d in dossiers_raw:
+        did = d["dossierId"]
+        content_fp = content_fps[did]
+        call_id = dossier_call_id(did)
+        decision = decisions[did]
 
         input_digest = content_fp
         store.save_proposal(
-            call_id, d["dossierId"], decision["action"], decision["target"], decision["payload"], input_digest
+            call_id, did, decision["action"], decision["target"], decision["payload"], input_digest
         )
 
         proposals.append(
             Proposal(
-                dossierId=d["dossierId"],
+                dossierId=did,
                 callId=call_id,
                 action=decision["action"],
                 target=decision["target"],
